@@ -1,10 +1,19 @@
+import Board from "./components/Board/index";
+import Toolbar from "./components/Toolbar/index";
+import Toolbox from "./components/Toolbox";
+import BoardProvider from "./store/BoardProvider";
+import ToolBoxProvider from "./store/toolboxProvider";
 
 
 function App() {
   return (
-    <div className="App">
-      <h1> my whiteboard</h1>
-    </div>
+    <BoardProvider>
+      <ToolBoxProvider>
+        <Toolbar />
+        <Board />
+        <Toolbox />
+      </ToolBoxProvider>
+    </BoardProvider>
   );
 }
 
