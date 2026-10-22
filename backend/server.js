@@ -243,8 +243,11 @@ app.use((error, req, res, next) => {
 
 connectToDatabase();
 
-server.listen(3030, () => {
-    console.log('Server is running on port 3030.');
+
+const PORT = process.env.PORT || 3030;
+
+server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}.`);
 });
 
 
