@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { FaPencilAlt } from "react-icons/fa";
 import Auth from "./components/Auth";
 import Board from "./components/Board";
 import CanvasDashboard from "./components/CanvasDashboard";
@@ -76,27 +77,36 @@ const ActiveCanvas = ({ token, canvas, canRename, onBack, onSignOut }) => {
     >
       <ToolBoxProvider>
         <div className={classes.canvasHeader}>
-          <button type="button" onClick={onBack}>← Canvases</button>
-          {canRename ? (
-            <form className={classes.nameForm} onSubmit={submitCanvasName}>
-              <input
-                aria-label="Canvas name"
-                value={nameDraft}
-                onChange={(event) => setNameDraft(event.target.value)}
-                maxLength={100}
-                required
-              />
-              <button type="submit" disabled={!nameDraft.trim() || nameDraft.trim() === canvasName}>
-                Rename
-              </button>
-            </form>
-          ) : (
-            <strong>{canvasName}</strong>
-          )}
+          <div className={classes.canvasHeaderLeft}>
+            <button className={classes.canvasBackButton} type="button" onClick={onBack}>
+              ← Canvases
+            </button>
+            {canRename ? (
+              <form className={classes.nameForm} onSubmit={submitCanvasName}>
+                <input
+                  aria-label="Canvas name"
+                  value={nameDraft}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  maxLength={20}
+                  required
+                />
+                <button
+                  className={classes.renameButton}
+                  type="submit"
+                  title="Rename canvas"
+                  aria-label="Rename canvas"
+                  disabled={!nameDraft.trim() || nameDraft.trim() === canvasName}
+                >
+                  <FaPencilAlt aria-hidden="true" />
+                </button>
+              </form>
+            ) : (
+              <strong>{canvasName}</strong>
+            )}
+          </div>
+          <Toolbar />
           <span className={classes.saveStatus} role="status">{saveStatus}</span>
-          <button type="button" onClick={onSignOut}>Sign out</button>
         </div>
-        <Toolbar />
         <Board />
         <Toolbox />
       </ToolBoxProvider>

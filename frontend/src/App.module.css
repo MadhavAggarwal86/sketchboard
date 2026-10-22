@@ -1,17 +1,29 @@
 .canvasHeader {
   position: absolute;
   z-index: 2;
-  bottom: 14px;
-  left: 16px;
-  right: 16px;
+  top: 14px;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  white-space: nowrap;
   color: #334155;
   font: 14px Lato, sans-serif;
 }
 
-.canvasHeader button {
+.canvasHeaderLeft {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.canvasBackButton {
+  flex: 0 0 auto;
   padding: 8px 10px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
@@ -25,10 +37,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
 }
 
 .nameForm input {
-  width: min(220px, 24vw);
+  width: min(180px, 16vw);
   padding: 8px 10px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
@@ -40,9 +53,27 @@
   cursor: default;
 }
 
+.nameForm .renameButton {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: #334155;
+}
+
+.nameForm .renameButton:hover:not(:disabled) {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
 .saveStatus {
-  margin-left: auto;
-  max-width: 34vw;
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex: 0 0 auto;
+  max-width: 24vw;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -79,7 +110,19 @@
     font-size: 12px;
   }
 
-  .canvasHeader button {
+  .canvasHeaderLeft {
+    gap: 6px;
+  }
+
+  .nameForm input {
+    width: 120px;
+  }
+
+  .canvasBackButton {
     padding: 7px;
+  }
+
+  .saveStatus {
+    max-width: 20vw;
   }
 }

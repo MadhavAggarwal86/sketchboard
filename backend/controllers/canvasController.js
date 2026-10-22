@@ -103,8 +103,8 @@ exports.renameCanvas = async (req, res) => {
         if (!canvasId || typeof name !== "string" || !name.trim()) {
             return res.status(400).json({ error: "canvasId and a non-empty name are required" });
         }
-        if (name.trim().length > 100) {
-            return res.status(400).json({ error: "Canvas name must be 100 characters or fewer" });
+        if (name.trim().length > 20) {
+            return res.status(400).json({ error: "Canvas name must be 18 characters or fewer" });
         }
         if (isInvalidCanvasId(canvasId)) {
             return res.status(400).json({ error: "Invalid canvas ID" });
@@ -139,12 +139,20 @@ exports.deleteCanvas = async (req, res) => {
             return res.status(404).json({ error: "Canvas not found" });
         }
 
-        if (canvas.owner.toString() !== userId) {
-            return res.status(403).json({ error: "Only the owner can delete this canvas" });
+        if (canvas.owner.toString() === userId) {
+            await Canvas.findByIdAndDelete(canvasId);
+            return res.json({ message: "Canvas deleted successfully", deleted: true });
         }
 
-        await Canvas.findByIdAndDelete(canvasId);
-        res.json({ message: "Canvas deleted successfully" });
+        if (!isSharedWithUser(canvas, userId)) {
+            return res.status(403).json({ error: "You do not have access to this canvas" });
+        }
+
+        canvas.shared = canvas.shared.filter(
+            (sharedUserId) => sharedUserId.toString() !== userId
+        );
+        await canvas.save();
+        return res.json({ message: "Canvas removed from your shared list", deleted: false });
     } catch (error) {
         res.status(500).json({ error: "Failed to delete canvas" });
     }

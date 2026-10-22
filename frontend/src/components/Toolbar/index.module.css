@@ -1,5 +1,7 @@
 .container {
   @apply absolute left-1/2 top-5 px-3 py-2 flex rounded border border-gray-400;
+  top: 6px;
+  left: 50%;
   transform: translateX(-50%);
   box-shadow: 1px 0 10px rgba(0, 0, 0, 0.2);
 }
@@ -9,7 +11,8 @@
 }
 
 .downloadButton {
-  @apply flex justify-center items-center text-xl p-3 text-black cursor-pointer bg-transparent border-0;
+  @apply flex justify-center items-center text-xl text-black cursor-pointer bg-transparent border-0;
+  @apply p-3;
 }
 
 .toolItem:hover {
