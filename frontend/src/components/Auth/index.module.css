@@ -1,0 +1,73 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f3f6fb;
+  font-family: Lato, sans-serif;
+}
+
+.card {
+  width: min(100%, 420px);
+  display: grid;
+  gap: 16px;
+  padding: 32px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 12px 36px #0f172a12;
+}
+
+.card h1,
+.card p {
+  margin: 0;
+}
+
+.card h1 {
+  font-family: Poppins, sans-serif;
+}
+
+.card p,
+.card small {
+  color: #64748b;
+}
+
+.card label {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-weight: 600;
+}
+
+.card input {
+  padding: 11px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.card button {
+  padding: 12px;
+  border: 0;
+  border-radius: 6px;
+  background: #2563eb;
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.card button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.card .switch {
+  padding: 4px;
+  background: transparent;
+  color: #2563eb;
+}
+
+.error {
+  color: #b91c1c;
+}

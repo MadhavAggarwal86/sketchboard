@@ -74,6 +74,33 @@ export const createRoughElement = (id, x1, y1, x2, y2, {type, stroke, fill, size
     }
 }
 
+export const serializeElements = (elements) => elements.map((element) => (
+  Object.fromEntries(
+    Object.entries(element).filter(([key]) => key !== "path" && key !== "roughEle")
+  )
+));
+
+export const hydrateElements = (elements = []) => elements.map((element) => {
+  if (element.type === TOOL_ITEMS.BRUSH) {
+    const points = element.points || [];
+    return {
+      ...element,
+      path: new Path2D(getSvgPathFromStroke(getStroke(points, {size: element.size}))),
+    };
+  }
+  if ([TOOL_ITEMS.LINE, TOOL_ITEMS.RECTANGLE, TOOL_ITEMS.CIRCLE, TOOL_ITEMS.ARROW].includes(element.type)) {
+    return createRoughElement(
+      element.id,
+      element.x1,
+      element.y1,
+      element.x2,
+      element.y2,
+      element
+    );
+  }
+  return element;
+});
+
 export const getSvgPathFromStroke = (stroke) => {
   if (!stroke.length) return "";
 

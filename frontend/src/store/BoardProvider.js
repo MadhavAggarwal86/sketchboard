@@ -1,6 +1,6 @@
 import boardContext from "./board-context";
 import { BOARD_ACTIONS, TOOL_ACTION_TYPES, TOOL_ITEMS } from "../constants";
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import {
     createRoughElement,
     getSvgPathFromStroke,
@@ -225,6 +225,8 @@ const boardReducer = (state, action) => {
                 textMove: null,
                 history: newHistory,
                 index: state.index + 1,
+                saveVersion: state.saveVersion + 1,
+                saveSnapshot: elementsCopy,
             };
         }
         case BOARD_ACTIONS.CHANGE_TEXT: {
@@ -250,6 +252,8 @@ const boardReducer = (state, action) => {
                         elements,
                         history,
                         index: state.index + 1,
+                        saveVersion: state.saveVersion + 1,
+                        saveSnapshot: elements,
                     };
                 }
                 return {
@@ -278,6 +282,8 @@ const boardReducer = (state, action) => {
                 history,
                 index: state.index + 1,
                 hasChanged: false,
+                saveVersion: state.saveVersion + 1,
+                saveSnapshot: elements,
             };
         }
         case BOARD_ACTIONS.CANCEL_TEXT: {
@@ -301,6 +307,8 @@ const boardReducer = (state, action) => {
                 index: state.index - 1,
                 toolActionType: TOOL_ACTION_TYPES.NONE,
                 hasChanged: false,
+                saveVersion: state.saveVersion + 1,
+                saveSnapshot: state.history[state.index - 1],
             };
         case BOARD_ACTIONS.REDO:
             if (state.toolActionType !== TOOL_ACTION_TYPES.NONE) return state;
@@ -311,6 +319,8 @@ const boardReducer = (state, action) => {
                 index: state.index + 1,
                 toolActionType: TOOL_ACTION_TYPES.NONE,
                 hasChanged: false,
+                saveVersion: state.saveVersion + 1,
+                saveSnapshot: state.history[state.index + 1],
             };
             
         default:
@@ -318,19 +328,35 @@ const boardReducer = (state, action) => {
         }
 }
         
-const intialBoardState = {
+const createInitialBoardState = (elements = []) => ({
     activeToolItem: TOOL_ITEMS.BRUSH,
     toolActionType: TOOL_ACTION_TYPES.NONE,
-    elements: [],
-    history: [[]],
+    elements,
+    history: [elements],
     index: 0,
     hasChanged: false,
+    saveVersion: 0,
+    saveSnapshot: elements,
     textEditing: null,
     textMove: null,
-}
+});
         
-const BoardProvider = ({children}) => {
-    const [boardState, dispatchBoardAction] = useReducer(boardReducer, intialBoardState);
+const BoardProvider = ({children, initialElements = [], onElementsChange}) => {
+    const [boardState, dispatchBoardAction] = useReducer(
+        boardReducer,
+        initialElements,
+        createInitialBoardState
+    );
+    const lastSavedVersionRef = useRef(boardState.saveVersion);
+
+    useEffect(() => {
+        if (boardState.saveVersion === lastSavedVersionRef.current) return undefined;
+        const timeoutId = window.setTimeout(() => {
+            lastSavedVersionRef.current = boardState.saveVersion;
+            onElementsChange?.(boardState.saveSnapshot);
+        }, 700);
+        return () => window.clearTimeout(timeoutId);
+    }, [boardState.saveVersion, boardState.saveSnapshot, onElementsChange]);
 
     useEffect(() => {
         const handleKeyDown = (event) => {

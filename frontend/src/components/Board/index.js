@@ -42,11 +42,10 @@ function Board() {
     }
   }, [writingElementId, toolActionType, writingElement?.text]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasref.current;
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-
   }, []);
 
   useLayoutEffect(() => {
