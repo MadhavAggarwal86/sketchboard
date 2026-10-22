@@ -1,4 +1,5 @@
 const Canvas = require('../models/canvas');
+const Comment = require('../models/comment');
 const mongoose = require('mongoose');
 const isSharedWithUser = (canvas, userId) => (
     canvas.shared.some((sharedUserId) => sharedUserId.toString() === userId)
@@ -140,6 +141,9 @@ exports.deleteCanvas = async (req, res) => {
         }
 
         if (canvas.owner.toString() === userId) {
+            const io = req.app.get('io');
+            io?.to(`canvas:${canvasId}`).emit('canvasDeleted', { canvasId });
+            await Comment.deleteMany({ canvas: canvasId });
             await Canvas.findByIdAndDelete(canvasId);
             return res.json({ message: "Canvas deleted successfully", deleted: true });
         }
@@ -152,6 +156,8 @@ exports.deleteCanvas = async (req, res) => {
             (sharedUserId) => sharedUserId.toString() !== userId
         );
         await canvas.save();
+        const io = req.app.get('io');
+        io?.to(`user:${userId}`).emit('canvasAccessRevoked', { canvasId });
         return res.json({ message: "Canvas removed from your shared list", deleted: false });
     } catch (error) {
         res.status(500).json({ error: "Failed to delete canvas" });

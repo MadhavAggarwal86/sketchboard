@@ -4,8 +4,15 @@ import boardContext from "../../store/board-context";
 import { TOOL_ACTION_TYPES, TOOL_ITEMS } from "../../constants";
 import toolBoxContext from "../../store/toolbox-context";
 import { getTextLayout } from "../../utils/element";
+import { FaComment } from "react-icons/fa";
+import classes from "./index.module.css";
 
-function Board() {
+function Board({
+  commentMode = false,
+  comments = [],
+  onAddComment,
+  commentConnectionError = "",
+}) {
   const canvasref = useRef();
   const {
     elements,
@@ -22,6 +29,12 @@ function Board() {
   const [text, setText] = useState("");
   const textAreaRef = useRef(null);
   const cancelledTextId = useRef(null);
+  const commentInputRef = useRef(null);
+  const [commentDraft, setCommentDraft] = useState(null);
+  const [selectedCommentId, setSelectedCommentId] = useState(null);
+  const [commentText, setCommentText] = useState("");
+  const [commentSubmitError, setCommentSubmitError] = useState("");
+  const [submittingComment, setSubmittingComment] = useState(false);
   const writingElement = toolActionType === TOOL_ACTION_TYPES.WRITING
     ? elements.find((element) => element.id === editingTextId)
     : null;
@@ -41,6 +54,10 @@ function Board() {
       textAreaRef.current?.focus();
     }
   }, [writingElementId, toolActionType, writingElement?.text]);
+
+  useEffect(() => {
+    if (commentDraft) commentInputRef.current?.focus();
+  }, [commentDraft]);
 
   useLayoutEffect(() => {
     const canvas = canvasref.current;
@@ -90,6 +107,7 @@ function Board() {
   }, [elements]);
 
   const handleMouseDown = (event) => {
+    if (commentMode) return;
     if (writingElement) {
       textAreaBlurHandler(
         writingElementId,
@@ -113,6 +131,13 @@ function Board() {
         writingLayout,
         writingSize
       );
+      return;
+    }
+    if (commentMode) {
+      setSelectedCommentId(null);
+      setCommentSubmitError("");
+      setCommentText("");
+      setCommentDraft({ x: event.clientX, y: event.clientY });
       return;
     }
     if (
@@ -164,18 +189,95 @@ function Board() {
     }
   };
 
+  const submitComment = async (event) => {
+    event.preventDefault();
+    if (!commentDraft || !commentText.trim() || submittingComment) return;
+
+    setSubmittingComment(true);
+    setCommentSubmitError("");
+    try {
+      await onAddComment({
+        x: commentDraft.x,
+        y: commentDraft.y,
+        text: commentText.trim(),
+      });
+      setCommentDraft(null);
+      setCommentText("");
+    } catch (error) {
+      setCommentSubmitError(error.message);
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
 
   return (
     <>
       <canvas
         ref={canvasref}
         id="whiteboard-canvas"
+        className={commentMode ? classes.commentCanvas : undefined}
         onPointerDown={handleMouseDown}
         onPointerMove={handleMouseMove}
         onPointerUp={BoardMouseUpHandler}
         onPointerCancel={BoardMouseUpHandler}
         onClick={handleCanvasClick}
       />
+      {commentConnectionError && (
+        <div className={classes.commentConnectionError} role="status">
+          {commentConnectionError}
+        </div>
+      )}
+      {comments.map((comment, index) => (
+        <div
+          key={comment._id}
+          className={classes.commentMarker}
+          style={{ left: comment.x, top: comment.y }}
+        >
+          <button
+            type="button"
+            className={classes.commentPin}
+            aria-label={`View comment ${index + 1} by ${comment.author?.name || "user"}`}
+            aria-expanded={selectedCommentId === comment._id}
+            onClick={() => setSelectedCommentId((current) => (
+              current === comment._id ? null : comment._id
+            ))}
+          >
+            <FaComment />
+          </button>
+          {selectedCommentId === comment._id && (
+            <div className={classes.commentBubble}>
+              <strong>{comment.author?.name || "User"}</strong>
+              <p>{comment.text}</p>
+            </div>
+          )}
+        </div>
+      ))}
+      {commentDraft && (
+        <form
+          className={classes.commentEditor}
+          style={{ left: commentDraft.x, top: commentDraft.y }}
+          onSubmit={submitComment}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <textarea
+            ref={commentInputRef}
+            aria-label="Write a canvas comment"
+            placeholder="Write a comment…"
+            value={commentText}
+            maxLength={2000}
+            onChange={(event) => setCommentText(event.target.value)}
+          />
+          {commentSubmitError && <p role="alert">{commentSubmitError}</p>}
+          <div>
+            <button type="button" onClick={() => setCommentDraft(null)}>Cancel</button>
+            <button type="submit" disabled={!commentText.trim() || submittingComment}>
+              {submittingComment ? "Sending…" : "Comment"}
+            </button>
+          </div>
+        </form>
+      )}
       {writingElement && (
         <textarea
           ref={textAreaRef}

@@ -1,0 +1,114 @@
+.commentCanvas {
+  cursor: crosshair;
+}
+
+.commentMarker {
+  position: fixed;
+  z-index: 5;
+}
+
+.commentPin {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  transform: translate(-50%, -100%);
+  border: 2px solid white;
+  border-radius: 50%;
+  background: #2563eb;
+  color: white;
+  box-shadow: 0 2px 8px #0f172a40;
+  cursor: pointer;
+}
+
+.commentBubble {
+  position: absolute;
+  left: 12px;
+  top: 0;
+  width: min(260px, 70vw);
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: white;
+  color: #0f172a;
+  box-shadow: 0 8px 24px #0f172a26;
+  font: 13px Lato, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.commentBubble p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
+.commentEditor {
+  position: fixed;
+  z-index: 6;
+  display: grid;
+  gap: 8px;
+  width: min(280px, 75vw);
+  padding: 12px;
+  transform: translate(10px, 10px);
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 8px 24px #0f172a26;
+  font: 13px Lato, sans-serif;
+}
+
+.commentEditor textarea {
+  box-sizing: border-box;
+  min-height: 76px;
+  padding: 8px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  font: inherit;
+}
+
+.commentEditor > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.commentEditor button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: #e2e8f0;
+  color: #334155;
+  font: inherit;
+  cursor: pointer;
+}
+
+.commentEditor button[type="submit"] {
+  background: #2563eb;
+  color: white;
+}
+
+.commentEditor button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.commentEditor [role="alert"] {
+  margin: 0;
+  color: #b91c1c;
+}
+
+.commentConnectionError {
+  position: fixed;
+  z-index: 6;
+  top: 86px;
+  left: 50%;
+  max-width: min(520px, 90vw);
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font: 13px Lato, sans-serif;
+}

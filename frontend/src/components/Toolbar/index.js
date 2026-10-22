@@ -2,13 +2,13 @@ import { useContext } from "react";
 import classes from "./index.module.css";
 import cx from "classnames";
 import { LuRectangleHorizontal } from "react-icons/lu";
-import { FaSlash, FaRegCircle, FaArrowRight, FaPaintBrush, FaEraser, FaFont, FaUndo, FaRedo, FaDownload } from "react-icons/fa";
+import { FaSlash, FaRegCircle, FaArrowRight, FaPaintBrush, FaEraser, FaFont, FaUndo, FaRedo, FaDownload, FaCommentDots } from "react-icons/fa";
 import boardContext from "../../store/board-context";
 import { TOOL_ITEMS } from "../../constants";
 
 
 
-const Toolbar = () => {
+const Toolbar = ({ commentMode = false, onToggleCommentMode }) => {
     const { activeToolItem, ChangeToolhandler, undo, redo, canUndo, canRedo } = useContext(boardContext);
     const downloadImage = () => {
         const canvas = document.getElementById("whiteboard-canvas");
@@ -117,6 +117,20 @@ const Toolbar = () => {
             >
                 <FaRedo />
             </div>
+            {onToggleCommentMode && (
+                <button
+                    className={cx(classes.toolItem, {
+                        [classes.active]: commentMode,
+                    })}
+                    onClick={onToggleCommentMode}
+                    title={commentMode ? "Exit comment mode" : "Add comment"}
+                    aria-label={commentMode ? "Exit comment mode" : "Add comment"}
+                    aria-pressed={commentMode}
+                    type="button"
+                >
+                    <FaCommentDots />
+                </button>
+            )}
             <button
                 className={classes.downloadButton}
                 onClick={downloadImage}

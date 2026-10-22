@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 const connectToDatabase = require('./config/db');
 const User = require('./models/user');
 const Canvas = require('./models/canvas');
+const Comment = require('./models/comment');
 
 const userRoutes = require('./routes/userRoutes');
 const canvasRoutes = require("./routes/canvasRoutes");
@@ -28,6 +29,7 @@ const io = new Server(server, {
         methods: ['GET', 'POST']
     }
 });
+app.set('io', io);
 
 io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
@@ -48,6 +50,96 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
     socket.join(`user:${socket.data.userId}`);
+
+    socket.on('joinCanvas', async (payload, acknowledge) => {
+        const respond = typeof acknowledge === 'function' ? acknowledge : () => {};
+        const canvasId = payload?.canvasId;
+        if (!mongoose.isValidObjectId(canvasId)) {
+            respond({ ok: false, error: 'Invalid canvas ID.' });
+            return;
+        }
+
+        try {
+            const canvas = await Canvas.findById(canvasId).select('owner shared');
+            if (!canvas) {
+                respond({ ok: false, error: 'Canvas not found.' });
+                return;
+            }
+            const userId = socket.data.userId;
+            const canAccess = canvas.owner.toString() === userId
+                || canvas.shared.some((sharedUserId) => sharedUserId.toString() === userId);
+            if (!canAccess) {
+                respond({ ok: false, error: 'You do not have access to this canvas.' });
+                return;
+            }
+
+            if (socket.data.canvasRoom) {
+                await socket.leave(socket.data.canvasRoom);
+            }
+            const room = `canvas:${canvasId}`;
+            await socket.join(room);
+            socket.data.canvasRoom = room;
+
+            const comments = await Comment.find({ canvas: canvasId })
+                .sort({ createdAt: 1 })
+                .populate('author', 'first_name last_name name')
+                .lean();
+            respond({ ok: true, comments: comments.map(serializeComment) });
+        } catch (error) {
+            console.error('Failed to join canvas comments:', error);
+            respond({ ok: false, error: 'Unable to load canvas comments.' });
+        }
+    });
+
+    socket.on('newComment', async (payload, acknowledge) => {
+        const respond = typeof acknowledge === 'function' ? acknowledge : () => {};
+        const { canvasId, x, y } = payload || {};
+        const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+        if (!mongoose.isValidObjectId(canvasId)) {
+            respond({ ok: false, error: 'Invalid canvas ID.' });
+            return;
+        }
+        if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+            respond({ ok: false, error: 'Comment position is invalid.' });
+            return;
+        }
+        if (!text || text.length > 2000) {
+            respond({ ok: false, error: 'Comments must contain between 1 and 2000 characters.' });
+            return;
+        }
+
+        try {
+            const canvas = await Canvas.findById(canvasId).select('owner shared');
+            if (!canvas) {
+                respond({ ok: false, error: 'Canvas not found.' });
+                return;
+            }
+            const userId = socket.data.userId;
+            const canAccess = canvas.owner.toString() === userId
+                || canvas.shared.some((sharedUserId) => sharedUserId.toString() === userId);
+            if (!canAccess) {
+                respond({ ok: false, error: 'You do not have access to this canvas.' });
+                return;
+            }
+
+            const comment = await Comment.create({
+                canvas: canvasId,
+                author: userId,
+                x,
+                y,
+                text
+            });
+            const savedComment = await Comment.findById(comment._id)
+                .populate('author', 'first_name last_name name')
+                .lean();
+            const serializedComment = serializeComment(savedComment);
+            io.to(`canvas:${canvasId}`).emit('newComment', serializedComment);
+            respond({ ok: true, comment: serializedComment });
+        } catch (error) {
+            console.error('Failed to save canvas comment:', error);
+            respond({ ok: false, error: 'Unable to save this comment.' });
+        }
+    });
 
     socket.on('shareCanvas', async (payload, acknowledge) => {
         const respond = typeof acknowledge === 'function' ? acknowledge : () => {};
@@ -111,6 +203,24 @@ io.on('connection', (socket) => {
         }
     });
 });
+
+function serializeComment(comment) {
+    const author = comment.author || {};
+    return {
+        _id: comment._id.toString(),
+        canvasId: comment.canvas.toString(),
+        x: comment.x,
+        y: comment.y,
+        text: comment.text,
+        createdAt: comment.createdAt,
+        author: {
+            id: author._id?.toString(),
+            name: [author.first_name, author.last_name].filter(Boolean).join(' ')
+                || author.name
+                || 'User'
+        }
+    };
+}
 
 app.use('/api/users', userRoutes);
 app.use("/api/canvas", canvasRoutes);

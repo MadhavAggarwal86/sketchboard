@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { FaPencilAlt } from "react-icons/fa";
+import { io } from "socket.io-client";
 import Auth from "./components/Auth";
 import Board from "./components/Board";
 import CanvasDashboard from "./components/CanvasDashboard";
@@ -9,6 +10,7 @@ import Toolbox from "./components/Toolbox";
 import BoardProvider from "./store/BoardProvider";
 import ToolBoxProvider from "./store/toolboxProvider";
 import { loadCanvas, renameCanvas, saveCanvas } from "./api/canvas";
+import { API_URL } from "./api/client";
 import { hydrateElements, serializeElements } from "./utils/element";
 import classes from "./App.module.css";
 
@@ -22,8 +24,19 @@ const readSession = () => {
   }
 };
 
-const ActiveCanvas = ({ token, canvas, canRename, onBack, onSignOut }) => {
+const ActiveCanvas = ({
+  token,
+  canvas,
+  canRename,
+  onBack,
+  onSignOut,
+  onCanvasUnavailable,
+}) => {
   const [saveStatus, setSaveStatus] = useState("All changes saved");
+  const [comments, setComments] = useState([]);
+  const [commentMode, setCommentMode] = useState(false);
+  const [commentConnectionError, setCommentConnectionError] = useState("");
+  const commentSocketRef = useRef(null);
   const [canvasName, setCanvasName] = useState(canvas.name || "Untitled canvas");
   const [nameDraft, setNameDraft] = useState(canvas.name || "Untitled canvas");
   const initialElements = useMemo(
@@ -36,6 +49,86 @@ const ActiveCanvas = ({ token, canvas, canRename, onBack, onSignOut }) => {
     setCanvasName(name);
     setNameDraft(name);
   }, [canvas._id, canvas.name]);
+
+  useEffect(() => {
+    const socket = io(API_URL, {
+      auth: { token },
+      transports: ["websocket"],
+    });
+    commentSocketRef.current = socket;
+
+    socket.on("connect", () => {
+      socket.timeout(10000).emit("joinCanvas", { canvasId: canvas._id }, (timeoutError, result) => {
+        if (timeoutError) {
+          setCommentConnectionError("Could not load comments. Check your connection and retry.");
+          return;
+        }
+        if (!result?.ok) {
+          setCommentConnectionError(result?.error || "Could not load comments.");
+          return;
+        }
+        setCommentConnectionError("");
+        setComments((current) => {
+          const liveComments = new Map(current.map((comment) => [comment._id, comment]));
+          result.comments.forEach((comment) => liveComments.set(comment._id, comment));
+          return [...liveComments.values()].sort(
+            (first, second) => new Date(first.createdAt) - new Date(second.createdAt)
+          );
+        });
+      });
+    });
+    socket.on("newComment", (comment) => {
+      if (comment.canvasId !== canvas._id.toString()) return;
+      setComments((current) => (
+        current.some((item) => item._id === comment._id)
+          ? current
+          : [...current, comment]
+      ));
+    });
+    const handleCanvasUnavailable = () => {
+      setComments([]);
+      socket.disconnect();
+      onCanvasUnavailable();
+    };
+    socket.on("canvasDeleted", handleCanvasUnavailable);
+    socket.on("canvasAccessRevoked", (event) => {
+      if (event.canvasId === canvas._id.toString()) handleCanvasUnavailable();
+    });
+    socket.on("connect_error", (error) => {
+      setCommentConnectionError(
+        error.message.includes("Authentication")
+          ? "Your session expired. Please sign in again."
+          : "Live comments are temporarily disconnected."
+      );
+    });
+
+    return () => {
+      socket.disconnect();
+      commentSocketRef.current = null;
+    };
+  }, [token, canvas._id, onCanvasUnavailable]);
+
+  const addComment = useCallback((comment) => new Promise((resolve, reject) => {
+    const socket = commentSocketRef.current;
+    if (!socket?.connected) {
+      reject(new Error("Live comments are disconnected. Please try again."));
+      return;
+    }
+
+    socket.timeout(10000).emit(
+      "newComment",
+      { canvasId: canvas._id, ...comment },
+      (timeoutError, result) => {
+        if (timeoutError) {
+          reject(new Error("The comment request timed out. Please try again."));
+        } else if (!result?.ok) {
+          reject(new Error(result?.error || "Unable to add comment."));
+        } else {
+          resolve(result.comment);
+        }
+      }
+    );
+  }), [canvas._id]);
 
   const saveElements = useCallback(async (elements) => {
     setSaveStatus("Saving…");
@@ -104,10 +197,18 @@ const ActiveCanvas = ({ token, canvas, canRename, onBack, onSignOut }) => {
               <strong>{canvasName}</strong>
             )}
           </div>
-          <Toolbar />
+          <Toolbar
+            commentMode={commentMode}
+            onToggleCommentMode={() => setCommentMode((current) => !current)}
+          />
           <span className={classes.saveStatus} role="status">{saveStatus}</span>
         </div>
-        <Board />
+        <Board
+          commentMode={commentMode}
+          comments={comments}
+          onAddComment={addComment}
+          commentConnectionError={commentConnectionError}
+        />
         <Toolbox />
       </ToolBoxProvider>
     </BoardProvider>
@@ -117,6 +218,10 @@ const ActiveCanvas = ({ token, canvas, canRename, onBack, onSignOut }) => {
 const CanvasRoute = ({ token, user, onSignOut }) => {
   const { canvasId } = useParams();
   const navigate = useNavigate();
+  const handleCanvasUnavailable = useCallback(
+    () => navigate("/", { replace: true }),
+    [navigate]
+  );
   const [canvas, setCanvas] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -163,6 +268,7 @@ const CanvasRoute = ({ token, user, onSignOut }) => {
       canRename={canvas.owner === user?.id}
       onBack={() => navigate("/")}
       onSignOut={onSignOut}
+      onCanvasUnavailable={handleCanvasUnavailable}
     />
   );
 };
