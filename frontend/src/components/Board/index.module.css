@@ -42,6 +42,34 @@
   white-space: pre-wrap;
 }
 
+.commentActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.commentActions [role="alert"] {
+  margin-right: auto;
+  color: #b91c1c;
+}
+
+.commentActions button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.commentActions button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .commentEditor {
   position: fixed;
   z-index: 6;

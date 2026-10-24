@@ -1,16 +1,74 @@
 import boardContext from "./board-context";
 import { BOARD_ACTIONS, TOOL_ACTION_TYPES, TOOL_ITEMS } from "../constants";
-import { useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from "react";
 import {
+    createElementId,
+    createElementSeed,
     createRoughElement,
     getSvgPathFromStroke,
+    hydrateElements,
     isPointNearElement,
+    serializeElements,
 } from "../utils/element";
 import getStroke from "perfect-freehand";
 
-const getNextElementId = (elements) => (
-    elements.reduce((nextId, element) => Math.max(nextId, element.id + 1), 0)
+const OUTBOX_FLUSH_DELAY_MS = 40;
+
+const sameId = (first, second) => String(first) === String(second);
+
+const findElement = (elements, id) => elements.find((element) => sameId(element.id, id));
+
+const applyElementChange = (elements, id, element) => {
+    const index = elements.findIndex((item) => sameId(item.id, id));
+    if (!element) return index < 0 ? elements : elements.filter((_, itemIndex) => itemIndex !== index);
+    if (index < 0) return [...elements, element];
+    const nextElements = [...elements];
+    nextElements[index] = element;
+    return nextElements;
+};
+
+// Remember what an element looked like before the current gesture first touched it.
+const trackBefore = (actionBefore, id, element) => (
+    actionBefore.some((change) => sameId(change.id, id))
+        ? actionBefore
+        : [...actionBefore, {id, before: element ?? null}]
 );
+
+// History entries are lists of {id, before, after}, so undo/redo only touches the
+// elements this user changed and leaves collaborators' work alone.
+const commitChanges = (state, changes) => {
+    const history = state.history.slice(0, state.index);
+    history.push(changes);
+    return {
+        ...state,
+        history,
+        index: history.length,
+        outbox: [
+            ...state.outbox,
+            ...changes.map(({id, after}) => ({id, element: after})),
+        ],
+    };
+};
+
+const createTextElement = (x1, y1, stroke, size, maxWidth) => {
+    const fontSize = Number(size) || 16;
+    return {
+        id: createElementId(),
+        type: TOOL_ITEMS.TEXT,
+        x1,
+        y1,
+        text: "",
+        stroke,
+        size,
+        layout: {
+            lines: [""],
+            width: 0,
+            height: fontSize * 1.2,
+            lineHeight: fontSize * 1.2,
+            maxWidth,
+        },
+    };
+};
 
 const boardReducer = (state, action) => {
     switch (action.type) {
@@ -25,6 +83,7 @@ const boardReducer = (state, action) => {
             return {
                 ...state,
                 toolActionType: action.payload.actionType,
+                actionBefore: [],
             };
         case BOARD_ACTIONS.DRAW_DOWN: {
                 const {clientX, clientY, stroke, fill, size, maxWidth} = action.payload;
@@ -37,6 +96,7 @@ const boardReducer = (state, action) => {
                     return {
                         ...state,
                         toolActionType: TOOL_ACTION_TYPES.MOVING_TEXT,
+                        actionBefore: [{id: existingText.id, before: existingText}],
                         textMove: {
                             id: existingText.id,
                             pointerX: clientX,
@@ -50,22 +110,7 @@ const boardReducer = (state, action) => {
                         },
                     };
                 }
-                const textElement = {
-                    id: getNextElementId(state.elements),
-                    type: TOOL_ITEMS.TEXT,
-                    x1: clientX,
-                    y1: clientY,
-                    text: "",
-                    stroke,
-                    size,
-                    layout: {
-                        lines: [""],
-                        width: 0,
-                        height: (Number(size) || 16) * 1.2,
-                        lineHeight: (Number(size) || 16) * 1.2,
-                        maxWidth,
-                    },
-                };
+                const textElement = createTextElement(clientX, clientY, stroke, size, maxWidth);
                 return {
                     ...state,
                     toolActionType: TOOL_ACTION_TYPES.WRITING,
@@ -74,81 +119,89 @@ const boardReducer = (state, action) => {
                 };
             }
             const newElement = createRoughElement(
-                getNextElementId(state.elements),
-                clientX, 
-                clientY, 
-                clientX, 
-                clientY, 
-                {type: state.activeToolItem, stroke, fill, size});
-            const prevEle = state.elements;
+                createElementId(),
+                clientX,
+                clientY,
+                clientX,
+                clientY,
+                {type: state.activeToolItem, stroke, fill, size, seed: createElementSeed()});
             return {
                 ...state,
                 toolActionType: TOOL_ACTION_TYPES.DRAWING,
-                elements: [...prevEle, newElement],
+                elements: [...state.elements, newElement],
+                drawingId: newElement.id,
+                actionBefore: [{id: newElement.id, before: null}],
+                outbox: [...state.outbox, {id: newElement.id, element: newElement}],
                 hasChanged: true,
             };
-        }    
+        }
         case BOARD_ACTIONS.DRAW_MOVE: {
-            if (state.toolActionType !== TOOL_ACTION_TYPES.DRAWING || state.elements.length === 0) {
-                return state;
-            }
+            if (state.toolActionType !== TOOL_ACTION_TYPES.DRAWING) return state;
+            const currentElement = findElement(state.elements, state.drawingId);
+            // A collaborator may have erased the element while it was being drawn.
+            if (!currentElement) return state;
             const {clientX, clientY} = action.payload;
-            const index = state.elements.length-1;
-            const elements = [...state.elements];
-            const currentElement = elements[index];
             const { type } = currentElement;
+            let updatedElement;
             switch (type) {
                 case TOOL_ITEMS.LINE:
                 case TOOL_ITEMS.RECTANGLE:
                 case TOOL_ITEMS.ARROW:
                 case TOOL_ITEMS.CIRCLE: {
-                    const {id, x1, y1, stroke, fill, size} = currentElement;
-                    const updatedElement = createRoughElement(id, x1, y1, clientX, clientY, {
+                    const {id, x1, y1, stroke, fill, size, seed} = currentElement;
+                    updatedElement = createRoughElement(id, x1, y1, clientX, clientY, {
                         type,
                         stroke,
                         fill,
                         size,
+                        seed,
                     });
-                    elements[index] = updatedElement;
-                    return {
-                        ...state,
-                        elements,
-                    }
+                    break;
                 }
                 case TOOL_ITEMS.BRUSH: {
                     const points = [
                         ...currentElement.points,
                         { x: clientX, y: clientY },
                     ];
-                    elements[index] = {
+                    updatedElement = {
                         ...currentElement,
                         points,
                         path: new Path2D(getSvgPathFromStroke(getStroke(points, {
                             size: currentElement.size,
                         }))),
                     };
-                    return {
-                        ...state,
-                        elements,
-                    };
+                    break;
                 }
                 case TOOL_ITEMS.TEXT:
                     return state;
-            
+
                 default:
                     throw new Error("Type not recognized");
             }
+            return {
+                ...state,
+                elements: applyElementChange(state.elements, updatedElement.id, updatedElement),
+                outbox: [...state.outbox, {id: updatedElement.id, element: updatedElement}],
+            };
         }
         case BOARD_ACTIONS.ERASE: {
             if (state.toolActionType !== TOOL_ACTION_TYPES.ERASING) return state;
             const {clientX, clientY} = action.payload;
-            const elements = state.elements.filter(
-                (element) => !isPointNearElement(element, clientX, clientY)
+            const erased = state.elements.filter(
+                (element) => isPointNearElement(element, clientX, clientY)
             );
-            if (elements.length === state.elements.length) return state;
+            if (!erased.length) return state;
             return {
                 ...state,
-                elements,
+                elements: state.elements.filter((element) => !erased.includes(element)),
+                actionBefore: erased.reduce(
+                    (actionBefore, element) => trackBefore(actionBefore, element.id, element),
+                    state.actionBefore
+                ),
+                outbox: [
+                    ...state.outbox,
+                    ...erased.map((element) => ({id: element.id, element: null})),
+                ],
                 hasChanged: true,
             };
         }
@@ -156,15 +209,18 @@ const boardReducer = (state, action) => {
             if (state.toolActionType !== TOOL_ACTION_TYPES.MOVING_TEXT || !state.textMove) return state;
             const {clientX, clientY} = action.payload;
             const textMove = state.textMove;
+            const textElement = findElement(state.elements, textMove.id);
+            if (!textElement) return state;
             const x1 = textMove.x1 + clientX - textMove.pointerX;
             const y1 = textMove.y1 + clientY - textMove.pointerY;
             const moved = textMove.moved || x1 !== textMove.x1 || y1 !== textMove.y1;
-            const elements = state.elements.map((element) => element.id === textMove.id
-                ? {...element, x1, y1}
-                : element);
+            const movedElement = {...textElement, x1, y1};
             return {
                 ...state,
-                elements,
+                elements: applyElementChange(state.elements, textMove.id, movedElement),
+                outbox: moved
+                    ? [...state.outbox, {id: textMove.id, element: movedElement}]
+                    : state.outbox,
                 textMove: {...textMove, moved},
                 hasChanged: moved,
             };
@@ -173,23 +229,13 @@ const boardReducer = (state, action) => {
             if (state.toolActionType === TOOL_ACTION_TYPES.MOVING_TEXT) {
                 const textMove = state.textMove;
                 if (!textMove?.moved) {
-                    const size = Number(textMove?.size) || 16;
-                    const textElement = {
-                        id: getNextElementId(state.elements),
-                        type: TOOL_ITEMS.TEXT,
-                        x1: textMove.pointerX,
-                        y1: textMove.pointerY,
-                        text: "",
-                        stroke: textMove.stroke,
-                        size,
-                        layout: {
-                            lines: [""],
-                            width: 0,
-                            height: size * 1.2,
-                            lineHeight: size * 1.2,
-                            maxWidth: textMove.maxWidth,
-                        },
-                    };
+                    const textElement = createTextElement(
+                        textMove.pointerX,
+                        textMove.pointerY,
+                        textMove.stroke,
+                        Number(textMove?.size) || 16,
+                        textMove.maxWidth
+                    );
                     return {
                         ...state,
                         toolActionType: TOOL_ACTION_TYPES.WRITING,
@@ -199,6 +245,7 @@ const boardReducer = (state, action) => {
                             originalText: null,
                         },
                         textMove: null,
+                        actionBefore: [],
                     };
                 }
             }
@@ -209,82 +256,57 @@ const boardReducer = (state, action) => {
             ) {
                 return state;
             }
-            if (!state.hasChanged) {
-                return {
-                    ...state,
-                    toolActionType: TOOL_ACTION_TYPES.NONE,
-                };
-            }
-            const elementsCopy = [...state.elements];
-            const newHistory = state.history.slice(0, state.index + 1);
-            newHistory.push(elementsCopy);
-            return {
+            const finishedState = {
                 ...state,
                 toolActionType: TOOL_ACTION_TYPES.NONE,
                 hasChanged: false,
                 textMove: null,
-                history: newHistory,
-                index: state.index + 1,
-                saveVersion: state.saveVersion + 1,
-                saveSnapshot: elementsCopy,
+                drawingId: null,
+                actionBefore: [],
             };
+            const changes = state.hasChanged
+                ? state.actionBefore
+                    .map(({id, before}) => ({
+                        id,
+                        before,
+                        after: findElement(state.elements, id) ?? null,
+                    }))
+                    .filter(({before, after}) => before !== after)
+                : [];
+            return changes.length ? commitChanges(finishedState, changes) : finishedState;
         }
         case BOARD_ACTIONS.CHANGE_TEXT: {
             const {id, text, layout, size} = action.payload;
-            const index = state.elements.findIndex((element) => element.id === id);
-            if (index < 0 || state.elements[index].type !== TOOL_ITEMS.TEXT) {
-                return {
-                    ...state,
-                    toolActionType: TOOL_ACTION_TYPES.NONE,
-                    textEditing: null,
-                };
-            }
-            if (!text.trim()) {
-                const isNewText = state.textEditing?.originalText === null;
-                if (!isNewText) {
-                    const elements = state.elements.filter((element) => element.id !== id);
-                    const history = state.history.slice(0, state.index + 1);
-                    history.push(elements);
-                    return {
-                        ...state,
-                        toolActionType: TOOL_ACTION_TYPES.NONE,
-                        textEditing: null,
-                        elements,
-                        history,
-                        index: state.index + 1,
-                        saveVersion: state.saveVersion + 1,
-                        saveSnapshot: elements,
-                    };
-                }
-                return {
-                    ...state,
-                    toolActionType: TOOL_ACTION_TYPES.NONE,
-                    textEditing: null,
-                    elements: state.elements.filter((element) => element.id !== id),
-                };
-            }
-            const elements = [...state.elements];
-            if (elements[index].text === text && elements[index].size === size) {
-                return {
-                    ...state,
-                    toolActionType: TOOL_ACTION_TYPES.NONE,
-                    textEditing: null,
-                };
-            }
-            elements[index] = {...elements[index], text, layout, size};
-            const history = state.history.slice(0, state.index + 1);
-            history.push(elements);
-            return {
+            const currentElement = findElement(state.elements, id);
+            const isNewText = state.textEditing?.originalText === null;
+            const finishedState = {
                 ...state,
                 toolActionType: TOOL_ACTION_TYPES.NONE,
                 textEditing: null,
-                elements,
-                history,
-                index: state.index + 1,
-                hasChanged: false,
-                saveVersion: state.saveVersion + 1,
-                saveSnapshot: elements,
             };
+            if (!currentElement || currentElement.type !== TOOL_ITEMS.TEXT) {
+                return finishedState;
+            }
+            if (!text.trim()) {
+                const elements = state.elements.filter((element) => !sameId(element.id, id));
+                if (isNewText) return {...finishedState, elements};
+                return commitChanges(
+                    {...finishedState, elements},
+                    [{id, before: currentElement, after: null}]
+                );
+            }
+            if (currentElement.text === text && currentElement.size === size) {
+                return finishedState;
+            }
+            const updatedElement = {...currentElement, text, layout, size};
+            return commitChanges(
+                {
+                    ...finishedState,
+                    elements: applyElementChange(state.elements, id, updatedElement),
+                    hasChanged: false,
+                },
+                [{id, before: isNewText ? null : currentElement, after: updatedElement}]
+            );
         }
         case BOARD_ACTIONS.CANCEL_TEXT: {
             const id = state.textEditing?.id;
@@ -294,69 +316,145 @@ const boardReducer = (state, action) => {
                 toolActionType: TOOL_ACTION_TYPES.NONE,
                 textEditing: null,
                 elements: isNewText
-                    ? state.elements.filter((element) => element.id !== id)
+                    ? state.elements.filter((element) => !sameId(element.id, id))
                     : state.elements,
             };
         }
         case BOARD_ACTIONS.UNDO:
+        case BOARD_ACTIONS.REDO: {
             if (state.toolActionType !== TOOL_ACTION_TYPES.NONE) return state;
-            if (state.index <= 0) return state;
+            const isUndo = action.type === BOARD_ACTIONS.UNDO;
+            if (isUndo ? state.index <= 0 : state.index >= state.history.length) return state;
+            const changes = state.history[isUndo ? state.index - 1 : state.index];
+            const updates = changes.map(({id, before, after}) => ({
+                id,
+                element: isUndo ? before : after,
+            }));
             return {
                 ...state,
-                elements: state.history[state.index - 1],
-                index: state.index - 1,
-                toolActionType: TOOL_ACTION_TYPES.NONE,
+                elements: updates.reduce(
+                    (elements, {id, element}) => applyElementChange(elements, id, element),
+                    state.elements
+                ),
+                index: state.index + (isUndo ? -1 : 1),
                 hasChanged: false,
-                saveVersion: state.saveVersion + 1,
-                saveSnapshot: state.history[state.index - 1],
+                outbox: [...state.outbox, ...updates],
             };
-        case BOARD_ACTIONS.REDO:
-            if (state.toolActionType !== TOOL_ACTION_TYPES.NONE) return state;
-            if (state.index >= state.history.length - 1) return state;
+        }
+        case BOARD_ACTIONS.REMOTE_CHANGES: {
+            const {upserts, deletes} = action.payload;
+            let elements = state.elements;
+            upserts.forEach((element) => {
+                elements = applyElementChange(elements, element.id, element);
+            });
+            deletes.forEach((id) => {
+                elements = applyElementChange(elements, id, null);
+            });
+            return {...state, elements};
+        }
+        case BOARD_ACTIONS.SYNC_ELEMENTS: {
+            // Server snapshot on (re)join, with local changes that haven't been sent yet on top.
+            let elements = state.outbox.reduce(
+                (current, {id, element}) => applyElementChange(current, id, element),
+                action.payload.elements
+            );
+            const editingElement = state.textEditing
+                && findElement(state.elements, state.textEditing.id);
+            if (editingElement && !findElement(elements, editingElement.id)) {
+                elements = [...elements, editingElement];
+            }
+            return {...state, elements};
+        }
+        case BOARD_ACTIONS.CLEAR_OUTBOX:
             return {
                 ...state,
-                elements: state.history[state.index + 1],
-                index: state.index + 1,
-                toolActionType: TOOL_ACTION_TYPES.NONE,
-                hasChanged: false,
-                saveVersion: state.saveVersion + 1,
-                saveSnapshot: state.history[state.index + 1],
+                outbox: state.outbox.slice(action.payload.count),
             };
-            
+
         default:
             return state;
         }
 }
-        
+
 const createInitialBoardState = (elements = []) => ({
     activeToolItem: TOOL_ITEMS.BRUSH,
     toolActionType: TOOL_ACTION_TYPES.NONE,
     elements,
-    history: [elements],
+    history: [],
     index: 0,
     hasChanged: false,
-    saveVersion: 0,
-    saveSnapshot: elements,
+    drawingId: null,
+    actionBefore: [],
+    outbox: [],
     textEditing: null,
     textMove: null,
 });
-        
-const BoardProvider = ({children, initialElements = [], onElementsChange}) => {
+
+// `realtime` connects the board to collaborators: send({upserts, deletes}) returns
+// false while offline, and subscribe(listener) delivers "changes" and "sync" events.
+const BoardProvider = ({children, initialElements = [], realtime}) => {
     const [boardState, dispatchBoardAction] = useReducer(
         boardReducer,
         initialElements,
         createInitialBoardState
     );
-    const lastSavedVersionRef = useRef(boardState.saveVersion);
+    const outboxRef = useRef(boardState.outbox);
+    const flushTimerRef = useRef(null);
 
     useEffect(() => {
-        if (boardState.saveVersion === lastSavedVersionRef.current) return undefined;
-        const timeoutId = window.setTimeout(() => {
-            lastSavedVersionRef.current = boardState.saveVersion;
-            onElementsChange?.(boardState.saveSnapshot);
-        }, 700);
-        return () => window.clearTimeout(timeoutId);
-    }, [boardState.saveVersion, boardState.saveSnapshot, onElementsChange]);
+        outboxRef.current = boardState.outbox;
+    });
+
+    const flushOutbox = useCallback(() => {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+        const outbox = outboxRef.current;
+        if (!outbox.length || !realtime) return;
+
+        const latestChanges = new Map();
+        outbox.forEach((change) => latestChanges.set(String(change.id), change));
+        const upserts = [];
+        const deletes = [];
+        latestChanges.forEach(({id, element}) => {
+            if (element) upserts.push(element);
+            else deletes.push(id);
+        });
+        if (!realtime.send({upserts: serializeElements(upserts), deletes})) return;
+        dispatchBoardAction({
+            type: BOARD_ACTIONS.CLEAR_OUTBOX,
+            payload: {count: outbox.length},
+        });
+    }, [realtime]);
+
+    useEffect(() => {
+        if (!boardState.outbox.length || flushTimerRef.current) return;
+        flushTimerRef.current = window.setTimeout(flushOutbox, OUTBOX_FLUSH_DELAY_MS);
+    }, [boardState.outbox, flushOutbox]);
+
+    // Layout cleanups run before the parent's passive cleanup disconnects the socket.
+    useLayoutEffect(() => () => flushOutbox(), [flushOutbox]);
+
+    useEffect(() => {
+        if (!realtime) return undefined;
+        return realtime.subscribe((event) => {
+            if (event.type === "changes") {
+                dispatchBoardAction({
+                    type: BOARD_ACTIONS.REMOTE_CHANGES,
+                    payload: {
+                        upserts: hydrateElements(event.upserts || []),
+                        deletes: event.deletes || [],
+                    },
+                });
+            } else if (event.type === "sync") {
+                dispatchBoardAction({
+                    type: BOARD_ACTIONS.SYNC_ELEMENTS,
+                    payload: {elements: hydrateElements(event.elements || [])},
+                });
+                // Anything drawn while offline is still in the outbox; send it now.
+                window.setTimeout(flushOutbox, 0);
+            }
+        });
+    }, [realtime, flushOutbox]);
 
     useEffect(() => {
         const handleKeyDown = (event) => {
@@ -407,7 +505,7 @@ const BoardProvider = ({children, initialElements = [], onElementsChange}) => {
         dispatchBoardAction({
             type: BOARD_ACTIONS.DRAW_DOWN,
             payload: {
-                clientX, 
+                clientX,
                 clientY,
                 stroke: toolboxState[boardState.activeToolItem]?.stroke,
                 fill: toolboxState[boardState.activeToolItem]?.fill,
@@ -469,7 +567,7 @@ const BoardProvider = ({children, initialElements = [], onElementsChange}) => {
         elements: boardState.elements,
         editingTextId: boardState.textEditing?.id,
         canUndo: boardState.index > 0,
-        canRedo: boardState.index < boardState.history.length - 1,
+        canRedo: boardState.index < boardState.history.length,
         ChangeToolhandler,
         BoardMouseDownhandler,
         BoardMouseMovehandler,

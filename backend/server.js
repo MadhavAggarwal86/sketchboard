@@ -8,6 +8,12 @@ const connectToDatabase = require('./config/db');
 const User = require('./models/user');
 const Canvas = require('./models/canvas');
 const Comment = require('./models/comment');
+const {
+    queueElementChanges,
+    waitForWrites,
+    withPendingChanges,
+    flushAllCanvases,
+} = require('./realtime/elementStore');
 
 const userRoutes = require('./routes/userRoutes');
 const canvasRoutes = require("./routes/canvasRoutes");
@@ -60,7 +66,8 @@ io.on('connection', (socket) => {
         }
 
         try {
-            const canvas = await Canvas.findById(canvasId).select('owner shared');
+            await waitForWrites(canvasId);
+            const canvas = await Canvas.findById(canvasId).select('owner shared elements').lean();
             if (!canvas) {
                 respond({ ok: false, error: 'Canvas not found.' });
                 return;
@@ -80,14 +87,77 @@ io.on('connection', (socket) => {
             await socket.join(room);
             socket.data.canvasRoom = room;
 
+            // Merge unsaved changes after joining the room, so nothing broadcast
+            // from here on can be missing from this snapshot.
+            const elements = withPendingChanges(canvasId, canvas.elements || []);
+
             const comments = await Comment.find({ canvas: canvasId })
                 .sort({ createdAt: 1 })
                 .populate('author', 'first_name last_name name')
                 .lean();
-            respond({ ok: true, comments: comments.map(serializeComment) });
+            respond({ ok: true, elements, comments: comments.map(serializeComment) });
         } catch (error) {
-            console.error('Failed to join canvas comments:', error);
-            respond({ ok: false, error: 'Unable to load canvas comments.' });
+            console.error('Failed to join canvas:', error);
+            respond({ ok: false, error: 'Unable to load this canvas.' });
+        }
+    });
+
+    socket.on('elementsChange', (payload, acknowledge) => {
+        const respond = typeof acknowledge === 'function' ? acknowledge : () => {};
+        const canvasId = payload?.canvasId;
+        const room = `canvas:${canvasId}`;
+        // Access was checked in joinCanvas; only the joined canvas can be edited.
+        if (!mongoose.isValidObjectId(canvasId) || socket.data.canvasRoom !== room) {
+            respond({ ok: false, error: 'Join the canvas before editing it.' });
+            return;
+        }
+
+        const upserts = Array.isArray(payload.upserts)
+            ? payload.upserts.filter(isValidElement).map(sanitizeElement)
+            : [];
+        const deletes = Array.isArray(payload.deletes)
+            ? payload.deletes.filter(isValidElementId)
+            : [];
+        if (!upserts.length && !deletes.length) {
+            respond({ ok: true });
+            return;
+        }
+        if (upserts.length + deletes.length > MAX_ELEMENT_CHANGES) {
+            respond({ ok: false, error: 'Too many changes in one update.' });
+            return;
+        }
+
+        socket.to(room).emit('elementsChange', { canvasId, upserts, deletes });
+        queueElementChanges(canvasId, upserts, deletes);
+        respond({ ok: true });
+    });
+
+    socket.on('deleteComment', async (payload, acknowledge) => {
+        const respond = typeof acknowledge === 'function' ? acknowledge : () => {};
+        const commentId = payload?.commentId;
+        if (!mongoose.isValidObjectId(commentId)) {
+            respond({ ok: false, error: 'Invalid comment ID.' });
+            return;
+        }
+
+        try {
+            const comment = await Comment.findById(commentId).select('canvas author');
+            if (!comment) {
+                respond({ ok: false, error: 'Comment not found.' });
+                return;
+            }
+            if (comment.author.toString() !== socket.data.userId) {
+                respond({ ok: false, error: 'You can only delete your own comments.' });
+                return;
+            }
+
+            await comment.deleteOne();
+            const canvasId = comment.canvas.toString();
+            io.to(`canvas:${canvasId}`).emit('commentDeleted', { _id: commentId, canvasId });
+            respond({ ok: true });
+        } catch (error) {
+            console.error('Failed to delete canvas comment:', error);
+            respond({ ok: false, error: 'Unable to delete this comment.' });
         }
     });
 
@@ -204,6 +274,29 @@ io.on('connection', (socket) => {
     });
 });
 
+const ELEMENT_TYPES = ['BRUSH', 'LINE', 'RECTANGLE', 'CIRCLE', 'ARROW', 'TEXT'];
+const MAX_ELEMENT_CHANGES = 1000;
+const MAX_ELEMENT_BYTES = 256 * 1024;
+
+function isValidElementId(id) {
+    return (typeof id === 'string' && id.length > 0 && id.length <= 100)
+        || Number.isFinite(id);
+}
+
+function isValidElement(element) {
+    if (!element || typeof element !== 'object' || Array.isArray(element)) return false;
+    if (!isValidElementId(element.id) || !ELEMENT_TYPES.includes(element.type)) return false;
+    try {
+        return JSON.stringify(element).length <= MAX_ELEMENT_BYTES;
+    } catch (error) {
+        return false;
+    }
+}
+
+function sanitizeElement({ path, roughEle, ...element }) {
+    return element;
+}
+
 function serializeComment(comment) {
     const author = comment.author || {};
     return {
@@ -249,6 +342,13 @@ const PORT = process.env.PORT || 3030;
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}.`);
 });
+
+const shutDown = async () => {
+    await flushAllCanvases();
+    process.exit(0);
+};
+process.on('SIGTERM', shutDown);
+process.on('SIGINT', shutDown);
 
 
 

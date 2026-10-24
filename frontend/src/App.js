@@ -9,9 +9,9 @@ import Toolbar from "./components/Toolbar";
 import Toolbox from "./components/Toolbox";
 import BoardProvider from "./store/BoardProvider";
 import ToolBoxProvider from "./store/toolboxProvider";
-import { loadCanvas, renameCanvas, saveCanvas } from "./api/canvas";
+import { loadCanvas, renameCanvas } from "./api/canvas";
 import { API_URL } from "./api/client";
-import { hydrateElements, serializeElements } from "./utils/element";
+import { hydrateElements } from "./utils/element";
 import classes from "./App.module.css";
 
 const readSession = () => {
@@ -27,16 +27,19 @@ const readSession = () => {
 const ActiveCanvas = ({
   token,
   canvas,
+  currentUserId,
   canRename,
   onBack,
   onSignOut,
   onCanvasUnavailable,
 }) => {
-  const [saveStatus, setSaveStatus] = useState("All changes saved");
+  const [saveStatus, setSaveStatus] = useState("Connecting…");
   const [comments, setComments] = useState([]);
   const [commentMode, setCommentMode] = useState(false);
   const [commentConnectionError, setCommentConnectionError] = useState("");
-  const commentSocketRef = useRef(null);
+  const socketRef = useRef(null);
+  const joinedRef = useRef(false);
+  const boardListenersRef = useRef(new Set());
   const [canvasName, setCanvasName] = useState(canvas.name || "Untitled canvas");
   const [nameDraft, setNameDraft] = useState(canvas.name || "Untitled canvas");
   const initialElements = useMemo(
@@ -50,32 +53,58 @@ const ActiveCanvas = ({
     setNameDraft(name);
   }, [canvas._id, canvas.name]);
 
+  // Drawing changes travel over the same socket as comments.
+  const realtime = useMemo(() => ({
+    send: (changes) => {
+      const socket = socketRef.current;
+      if (!socket?.connected || !joinedRef.current) return false;
+      socket.emit("elementsChange", { canvasId: canvas._id, ...changes });
+      return true;
+    },
+    subscribe: (listener) => {
+      boardListenersRef.current.add(listener);
+      return () => boardListenersRef.current.delete(listener);
+    },
+  }), [canvas._id]);
+
   useEffect(() => {
+    const notifyBoard = (event) => {
+      boardListenersRef.current.forEach((listener) => listener(event));
+    };
     const socket = io(API_URL, {
       auth: { token },
       transports: ["websocket"],
     });
-    commentSocketRef.current = socket;
+    socketRef.current = socket;
 
     socket.on("connect", () => {
       socket.timeout(10000).emit("joinCanvas", { canvasId: canvas._id }, (timeoutError, result) => {
         if (timeoutError) {
-          setCommentConnectionError("Could not load comments. Check your connection and retry.");
+          setCommentConnectionError("Could not connect to this canvas. Check your connection and retry.");
           return;
         }
         if (!result?.ok) {
-          setCommentConnectionError(result?.error || "Could not load comments.");
+          setCommentConnectionError(result?.error || "Could not connect to this canvas.");
           return;
         }
+        joinedRef.current = true;
         setCommentConnectionError("");
-        setComments((current) => {
-          const liveComments = new Map(current.map((comment) => [comment._id, comment]));
-          result.comments.forEach((comment) => liveComments.set(comment._id, comment));
-          return [...liveComments.values()].sort(
-            (first, second) => new Date(first.createdAt) - new Date(second.createdAt)
-          );
-        });
+        setSaveStatus("Live · all changes saved");
+        setComments(result.comments);
+        notifyBoard({ type: "sync", elements: result.elements });
       });
+    });
+    socket.on("disconnect", () => {
+      joinedRef.current = false;
+      setSaveStatus("Offline · changes will sync on reconnect");
+    });
+    socket.on("elementsChange", (event) => {
+      if (event.canvasId !== canvas._id.toString()) return;
+      notifyBoard({ type: "changes", upserts: event.upserts, deletes: event.deletes });
+    });
+    socket.on("commentDeleted", (event) => {
+      if (event.canvasId !== canvas._id.toString()) return;
+      setComments((current) => current.filter((comment) => comment._id !== event._id));
     });
     socket.on("newComment", (comment) => {
       if (comment.canvasId !== canvas._id.toString()) return;
@@ -98,18 +127,19 @@ const ActiveCanvas = ({
       setCommentConnectionError(
         error.message.includes("Authentication")
           ? "Your session expired. Please sign in again."
-          : "Live comments are temporarily disconnected."
+          : "Live updates are temporarily disconnected."
       );
     });
 
     return () => {
+      joinedRef.current = false;
       socket.disconnect();
-      commentSocketRef.current = null;
+      socketRef.current = null;
     };
   }, [token, canvas._id, onCanvasUnavailable]);
 
   const addComment = useCallback((comment) => new Promise((resolve, reject) => {
-    const socket = commentSocketRef.current;
+    const socket = socketRef.current;
     if (!socket?.connected) {
       reject(new Error("Live comments are disconnected. Please try again."));
       return;
@@ -130,19 +160,24 @@ const ActiveCanvas = ({
     );
   }), [canvas._id]);
 
-  const saveElements = useCallback(async (elements) => {
-    setSaveStatus("Saving…");
-    try {
-      await saveCanvas(token, canvas._id, serializeElements(elements));
-      setSaveStatus("All changes saved");
-    } catch (error) {
-      if (error.status === 401) {
-        onSignOut();
-        return;
-      }
-      setSaveStatus(`Save failed: ${error.message}`);
+  const deleteComment = useCallback((commentId) => new Promise((resolve, reject) => {
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      reject(new Error("Live comments are disconnected. Please try again."));
+      return;
     }
-  }, [token, canvas._id, onSignOut]);
+
+    socket.timeout(10000).emit("deleteComment", { commentId }, (timeoutError, result) => {
+      if (timeoutError) {
+        reject(new Error("The delete request timed out. Please try again."));
+      } else if (!result?.ok) {
+        reject(new Error(result?.error || "Unable to delete comment."));
+      } else {
+        setComments((current) => current.filter((comment) => comment._id !== commentId));
+        resolve();
+      }
+    });
+  }), []);
 
   const submitCanvasName = async (event) => {
     event.preventDefault();
@@ -166,7 +201,7 @@ const ActiveCanvas = ({
     <BoardProvider
       key={canvas._id}
       initialElements={initialElements}
-      onElementsChange={saveElements}
+      realtime={realtime}
     >
       <ToolBoxProvider>
         <div className={classes.canvasHeader}>
@@ -206,7 +241,9 @@ const ActiveCanvas = ({
         <Board
           commentMode={commentMode}
           comments={comments}
+          currentUserId={currentUserId}
           onAddComment={addComment}
+          onDeleteComment={deleteComment}
           commentConnectionError={commentConnectionError}
         />
         <Toolbox />
@@ -265,6 +302,7 @@ const CanvasRoute = ({ token, user, onSignOut }) => {
       key={canvas._id}
       token={token}
       canvas={canvas}
+      currentUserId={user?.id}
       canRename={canvas.owner === user?.id}
       onBack={() => navigate("/")}
       onSignOut={onSignOut}

@@ -5,8 +5,20 @@ import getStroke from "perfect-freehand";
 
 const gen = rough.generator();
 
+// Ids must be unique across every collaborator drawing on the same canvas.
+export const createElementId = () => (
+    typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+);
 
-export const createRoughElement = (id, x1, y1, x2, y2, {type, stroke, fill, size}) => {
+export const createElementSeed = () => Math.floor(Math.random() * 2 ** 31) + 1;
+
+// Older canvases used numeric ids and derived the rough.js seed from them.
+const getElementSeed = (id, seed) => seed ?? (Number.isFinite(id) ? id + 1 : 1);
+
+export const createRoughElement = (id, x1, y1, x2, y2, {type, stroke, fill, size, seed}) => {
+    const elementSeed = getElementSeed(id, seed);
 
     const element = {
         id,
@@ -18,9 +30,10 @@ export const createRoughElement = (id, x1, y1, x2, y2, {type, stroke, fill, size
         stroke,
         fill,
         size,
+        seed: elementSeed,
     };
     let options = {
-        seed: id + 1,
+        seed: elementSeed,
         fillStyle: "solid",
     }
     if(stroke) {
@@ -42,6 +55,7 @@ export const createRoughElement = (id, x1, y1, x2, y2, {type, stroke, fill, size
                 type,
                 stroke,
                 size,
+                seed: elementSeed,
             }
             return brushElement;
         }

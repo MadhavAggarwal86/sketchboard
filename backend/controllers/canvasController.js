@@ -1,6 +1,7 @@
 const Canvas = require('../models/canvas');
 const Comment = require('../models/comment');
 const mongoose = require('mongoose');
+const { withPendingChanges, discardCanvasChanges } = require('../realtime/elementStore');
 const isSharedWithUser = (canvas, userId) => (
     canvas.shared.some((sharedUserId) => sharedUserId.toString() === userId)
 );
@@ -38,7 +39,9 @@ exports.loadCanvas = async (req, res) => {
             return res.status(403).json({ error: "Unauthorized to access this canvas" });
         }
 
-        res.json(canvas);
+        const result = canvas.toObject();
+        result.elements = withPendingChanges(canvasId, result.elements);
+        res.json(result);
     } catch (error) {
         res.status(500).json({ error: "Failed to load canvas" });
     }
@@ -143,6 +146,8 @@ exports.deleteCanvas = async (req, res) => {
         if (canvas.owner.toString() === userId) {
             const io = req.app.get('io');
             io?.to(`canvas:${canvasId}`).emit('canvasDeleted', { canvasId });
+            io?.in(`canvas:${canvasId}`).socketsLeave(`canvas:${canvasId}`);
+            discardCanvasChanges(canvasId);
             await Comment.deleteMany({ canvas: canvasId });
             await Canvas.findByIdAndDelete(canvasId);
             return res.json({ message: "Canvas deleted successfully", deleted: true });

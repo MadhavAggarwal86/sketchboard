@@ -10,7 +10,9 @@ import classes from "./index.module.css";
 function Board({
   commentMode = false,
   comments = [],
+  currentUserId,
   onAddComment,
+  onDeleteComment,
   commentConnectionError = "",
 }) {
   const canvasref = useRef();
@@ -35,6 +37,8 @@ function Board({
   const [commentText, setCommentText] = useState("");
   const [commentSubmitError, setCommentSubmitError] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [deletingCommentId, setDeletingCommentId] = useState(null);
+  const [commentDeleteError, setCommentDeleteError] = useState("");
   const writingElement = toolActionType === TOOL_ACTION_TYPES.WRITING
     ? elements.find((element) => element.id === editingTextId)
     : null;
@@ -209,7 +213,19 @@ function Board({
       setSubmittingComment(false);
     }
   };
-
+  const deleteComment = async (commentId) => {
+    if (deletingCommentId) return;
+    setDeletingCommentId(commentId);
+    setCommentDeleteError("");
+    try {
+      await onDeleteComment(commentId);
+      setSelectedCommentId(null);
+    } catch (error) {
+      setCommentDeleteError(error.message);
+    } finally {
+      setDeletingCommentId(null);
+    }
+  };
 
   return (
     <>
@@ -239,9 +255,12 @@ function Board({
             className={classes.commentPin}
             aria-label={`View comment ${index + 1} by ${comment.author?.name || "user"}`}
             aria-expanded={selectedCommentId === comment._id}
-            onClick={() => setSelectedCommentId((current) => (
-              current === comment._id ? null : comment._id
-            ))}
+            onClick={() => {
+              setCommentDeleteError("");
+              setSelectedCommentId((current) => (
+                current === comment._id ? null : comment._id
+              ));
+            }}
           >
             <FaComment />
           </button>
@@ -249,6 +268,18 @@ function Board({
             <div className={classes.commentBubble}>
               <strong>{comment.author?.name || "User"}</strong>
               <p>{comment.text}</p>
+              {currentUserId && comment.author?.id === currentUserId && (
+                <div className={classes.commentActions}>
+                  {commentDeleteError && <span role="alert">{commentDeleteError}</span>}
+                  <button
+                    type="button"
+                    onClick={() => deleteComment(comment._id)}
+                    disabled={deletingCommentId === comment._id}
+                  >
+                    {deletingCommentId === comment._id ? "Deleting…" : "Delete"}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
